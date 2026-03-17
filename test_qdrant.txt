@@ -1,0 +1,56 @@
+import asyncio
+import uuid
+from qdrant_client import AsyncQdrantClient
+from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
+
+async def main():
+    client = AsyncQdrantClient(":memory:")
+    collection_name = "financial_docs"
+    
+    await client.create_collection(
+        collection_name=collection_name,
+        vectors_config=VectorParams(size=4, distance=Distance.COSINE),
+    )
+
+    mock_vectors = [
+        PointStruct(
+            id=str(uuid.uuid4()), 
+            vector=[0.1, 0.2, 0.3, 0.4], 
+            payload={"doc_type": "transaction", "department": "retail", "year": 2025}
+        ),
+        PointStruct(
+            id=str(uuid.uuid4()), 
+            vector=[0.9, 0.8, 0.7, 0.6], 
+            payload={"doc_type": "policy", "department": "compliance", "year": 2024}
+        ),
+        PointStruct(
+            id=str(uuid.uuid4()), 
+            vector=[0.2, 0.1, 0.3, 0.5], 
+            payload={"doc_type": "transaction", "department": "corporate", "year": 2025}
+        )
+    ]
+
+    await client.upsert(
+        collection_name=collection_name,
+        points=mock_vectors
+    )
+
+    query_vector = [0.15, 0.25, 0.35, 0.45]
+
+    search_result = await client.search(
+        collection_name=collection_name,
+        query_vector=query_vector,
+        limit=2,
+        query_filter=Filter(
+            must=[
+                FieldCondition(key="doc_type", match=MatchValue(value="transaction")),
+                FieldCondition(key="year", match=MatchValue(value=2025))
+            ]
+        )
+    )
+
+    for hit in search_result:
+        print(f"ID: {hit.id} | Score: {hit.score:.4f} | Payload: {hit.payload}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
