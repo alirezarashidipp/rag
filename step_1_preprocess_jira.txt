@@ -1,0 +1,99 @@
+import re
+import pandas as pd
+from bs4 import BeautifulSoup
+
+
+# ---------- CLEANING ----------
+
+def clean_html(text):
+    if pd.isna(text):
+        return ""
+    soup = BeautifulSoup(str(text), "html.parser")
+    return soup.get_text(separator="\n")
+
+
+def remove_jira_artifacts(text):
+    if not text:
+        return ""
+
+    # remove jira patterns like {*}
+    text = re.sub(r"\{\*\}", " ", text)
+
+    # remove urls (optional)
+    text = re.sub(r"http\S+", "", text)
+
+    return text
+
+
+def normalize_bullets(text):
+    if not text:
+        return ""
+
+    text = re.sub(r"[•\*\-]\s+", "- ", text)
+    return text
+
+
+def normalize_whitespace(text):
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def clean_text(text):
+    text = clean_html(text)
+    text = remove_jira_artifacts(text)
+    text = normalize_bullets(text)
+    text = normalize_whitespace(text)
+    return text
+
+
+# ---------- BUILD DOCUMENT ----------
+
+def build_document(row):
+    key = str(row.get("Key", ""))
+
+    summary = clean_text(row.get("Summary", ""))
+    description = clean_text(row.get("Description", ""))
+    ac = clean_text(row.get("Acceptance Criteria", ""))
+
+    text = f"""
+[SUMMARY]
+{summary}
+
+[DESCRIPTION]
+{description}
+
+[ACCEPTANCE CRITERIA]
+{ac}
+""".strip()
+
+    return {
+        "id": key,
+        "text": text,
+        "metadata": {
+            "key": key,
+            "summary": summary[:200]
+        }
+    }
+
+
+# ---------- MAIN ----------
+
+def load_and_clean(csv_path):
+    df = pd.read_csv(csv_path)
+
+    documents = []
+    for _, row in df.iterrows():
+        doc = build_document(row)
+        documents.append(doc)
+
+    return documents
+
+
+# ---------- RUN ----------
+
+if __name__ == "__main__":
+    path = "step_0_get_data_from_jira_rag.csv"
+
+    docs = load_and_clean(path)
+
+    print(f"Loaded {len(docs)} documents")
+    print(docs[0])
