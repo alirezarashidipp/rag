@@ -1,0 +1,109 @@
+import uuid
+from typing import List, Dict
+from tqdm import tqdm
+
+from qdrant_client import QdrantClient
+from qdrant_client.models import VectorParams, Distance, PointStruct
+
+from openai import OpenAI
+
+
+# ---------- CONFIG ----------
+
+QDRANT_HOST = "localhost"
+QDRANT_PORT = 6333
+COLLECTION_NAME = "jira_rag"
+
+EMBED_MODEL = "text-embedding-3-small"
+VECTOR_SIZE = 1536  # برای این مدل
+
+client_openai = OpenAI()
+
+
+# ---------- CHUNKING ----------
+
+def chunk_text(text: str, chunk_size=400, overlap=50) -> List[str]:
+    words = text.split()
+    chunks = []
+
+    for i in range(0, len(words), chunk_size - overlap):
+        chunk = " ".join(words[i:i + chunk_size])
+        if chunk.strip():
+            chunks.append(chunk)
+
+    return chunks
+
+
+# ---------- QDRANT SETUP ----------
+
+def create_collection_if_not_exists(client: QdrantClient):
+    collections = [c.name for c in client.get_collections().collections]
+
+    if COLLECTION_NAME not in collections:
+        client.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=VectorParams(
+                size=VECTOR_SIZE,
+                distance=Distance.COSINE
+            )
+        )
+        print(f"Collection '{COLLECTION_NAME}' created.")
+    else:
+        print(f"Collection '{COLLECTION_NAME}' already exists.")
+
+
+# ---------- EMBEDDING ----------
+
+def embed_texts(texts: List[str]) -> List[List[float]]:
+    response = client_openai.embeddings.create(
+        model=EMBED_MODEL,
+        input=texts
+    )
+    return [item.embedding for item in response.data]
+
+
+# ---------- INDEXING ----------
+
+def index_documents(documents: List[Dict]):
+    qdrant = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+
+    create_collection_if_not_exists(qdrant)
+
+    all_points = []
+
+    for doc in tqdm(documents, desc="Indexing documents"):
+        chunks = chunk_text(doc["text"])
+
+        embeddings = embed_texts(chunks)
+
+        for i, (chunk, vector) in enumerate(zip(chunks, embeddings)):
+            point = PointStruct(
+                id=str(uuid.uuid4()),
+                vector=vector,
+                payload={
+                    "text": chunk,
+                    "key": doc["metadata"]["key"],
+                    "chunk_index": i
+                }
+            )
+            all_points.append(point)
+
+    # batch upsert
+    qdrant.upsert(
+        collection_name=COLLECTION_NAME,
+        points=all_points
+    )
+
+    print(f"Indexed {len(all_points)} chunks.")
+
+
+# ---------- MAIN ----------
+
+if __name__ == "__main__":
+    from step_1_preprocess_jira import load_and_clean
+
+    path = "step_0_get_data_from_jira_rag.csv"
+
+    docs = load_and_clean(path)
+
+    index_documents(docs)
